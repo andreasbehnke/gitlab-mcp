@@ -67,6 +67,32 @@ In this mode:
 Do not put user PATs into a shared server config. The shared server should only
 enable remote authorization and let each client provide its own token.
 
+## Multiple PATs Held by the Server
+
+Use a tokens file when the GitLab tokens must stay on the server — for example
+several agents on one host, each acting as its own GitLab user, that should never
+see a GitLab credential. Each client gets a token for the MCP server only.
+
+```bash
+STREAMABLE_HTTP=true \
+REMOTE_AUTHORIZATION=true \
+STREAMABLE_HTTP_AUTH_TOKENS_FILE=/run/secrets/gitlab-mcp-tokens.json \
+GITLAB_API_URL=https://gitlab.example.com/api/v4 \
+zereight-mcp-gitlab
+```
+
+```json
+[
+  { "name": "release-bot", "token": "<client token>", "gitlabToken": "glpat-..." },
+  { "name": "triage-agent", "token": "<client token>", "gitlabToken": "glpat-..." }
+]
+```
+
+Clients send `Authorization: Bearer <client token>`. A leaked client token
+reaches only the server's tools, as that entry's GitLab user. See
+[`STREAMABLE_HTTP_AUTH_TOKENS_FILE`](../configuration/environment-variables.md#streamable_http_auth_tokens_file)
+for the rules and incompatible options.
+
 ## Multiple GitLab Instances
 
 Enable dynamic API URL support when one server must connect to different GitLab

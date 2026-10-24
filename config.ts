@@ -1,3 +1,4 @@
+import { loadAuthTokensFile } from "./auth-tokens-file.js";
 import { parseCliArgs } from "./cli-boolean-flags.js";
 import { deprecatedEnvInputFromSources, type DeprecatedEnvInput } from "./deprecated-env.js";
 import {
@@ -122,6 +123,13 @@ export const SSE = getConfig("sse", "SSE") === "true";
 export const STREAMABLE_HTTP = getConfig("streamable-http", "STREAMABLE_HTTP") === "true";
 export const REMOTE_AUTHORIZATION = getConfig("remote-auth", "REMOTE_AUTHORIZATION") === "true";
 export const GITLAB_MCP_OAUTH = getConfig("mcp-oauth", "GITLAB_MCP_OAUTH") === "true";
+// Client bearer tokens mapped to server-held GitLab tokens (auth-tokens-file.ts).
+// Read once at module load, like GITLAB_PERSONAL_ACCESS_TOKEN_FILE.
+export const STREAMABLE_HTTP_AUTH_TOKENS_FILE = getConfig(
+  "streamable-http-auth-tokens-file",
+  "STREAMABLE_HTTP_AUTH_TOKENS_FILE"
+);
+export const STREAMABLE_HTTP_AUTH_TOKENS = loadAuthTokensFile(STREAMABLE_HTTP_AUTH_TOKENS_FILE);
 export const GITLAB_MCP_REQUEST_BODY_LIMIT =
   process.env.GITLAB_MCP_REQUEST_BODY_LIMIT?.trim() || "10mb";
 export const GITLAB_ALLOW_UNAUTHENTICATED_TOOL_DISCOVERY =

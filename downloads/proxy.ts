@@ -24,6 +24,14 @@ export interface DownloadProxyDependencies {
    * GITLAB_API_URL / GITLAB_ALLOWED_HOSTS allowlist uses.
    */
   isTrustedRedirectHost?: (host: string) => boolean;
+  /**
+   * Set when the server holds the GitLab tokens (STREAMABLE_HTTP_AUTH_TOKENS_FILE):
+   * maps the request's Authorization header to the GitLab auth header to send, or
+   * null to reject. Raw Private-Token / JOB-TOKEN headers are then not forwarded.
+   */
+  resolveHeaderAuth?: (
+    authorization: string | undefined
+  ) => { header: string; value: string } | null;
 }
 
 function canonicalizeQueryParams(params: Record<string, string>): string {
@@ -119,6 +127,15 @@ export function registerDownloadProxy(app: Express, deps: DownloadProxyDependenc
       rateLimitKey = decrypted.token;
       tokenApiUrl = decrypted.apiUrl;
       sealedProjectIds = decrypted.allowedProjectIds;
+    } else if (deps.resolveHeaderAuth) {
+      const authorization = req.headers["authorization"] as string | undefined;
+      const resolved = deps.resolveHeaderAuth(authorization);
+      if (!resolved) {
+        res.status(401).json({ error: "Authentication required" });
+        return;
+      }
+      headers[resolved.header] = resolved.value;
+      rateLimitKey = resolved.value;
     } else {
       const privateToken = req.headers["private-token"] as string | undefined;
       const jobToken = req.headers["job-token"] as string | undefined;

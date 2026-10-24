@@ -42,6 +42,7 @@ import {
   PORT,
   REMOTE_AUTHORIZATION,
   SESSION_TIMEOUT_SECONDS,
+  STREAMABLE_HTTP_AUTH_TOKENS,
   SSE,
   STREAMABLE_HTTP,
   MCP_TRUST_PROXY,
@@ -60,6 +61,7 @@ import {
   buildDeprecatedEnvInput,
 } from "./config.js";
 import { getDeprecatedEnvWarnings } from "./deprecated-env.js";
+import { bearerToken, findAuthTokenEntry } from "./auth-tokens-file.js";
 
 /** True when the server is running in remote/network mode (SSE or StreamableHTTP transport). */
 const IS_REMOTE = SSE || STREAMABLE_HTTP;
@@ -1647,6 +1649,37 @@ function validateConfiguration(): void {
     errors.push("ENABLE_DYNAMIC_API_URL=true requires REMOTE_AUTHORIZATION=true");
   }
 
+  // The tokens file reuses the remote-authorization session machinery, with the
+  // GitLab token looked up on the server instead of taken from the request.
+  if (STREAMABLE_HTTP_AUTH_TOKENS) {
+    if (!streamableHttp || !remoteAuth) {
+      errors.push(
+        "STREAMABLE_HTTP_AUTH_TOKENS_FILE requires STREAMABLE_HTTP=true and REMOTE_AUTHORIZATION=true"
+      );
+    }
+    if (streamableHttpAuthToken) {
+      errors.push(
+        "STREAMABLE_HTTP_AUTH_TOKENS_FILE and STREAMABLE_HTTP_AUTH_TOKEN are mutually exclusive"
+      );
+    }
+    if (mcpOAuth) {
+      errors.push("STREAMABLE_HTTP_AUTH_TOKENS_FILE is not compatible with GITLAB_MCP_OAUTH=true");
+    }
+    // A client-chosen API URL would receive a server-held GitLab token.
+    if (enableDynamicApiUrl) {
+      errors.push(
+        "STREAMABLE_HTTP_AUTH_TOKENS_FILE is not compatible with ENABLE_DYNAMIC_API_URL=true"
+      );
+    }
+    // Sealed session ids carry the GitLab token, so a client whose entry was
+    // removed could keep using a session it already holds.
+    if (OAUTH_STATELESS_MODE) {
+      errors.push(
+        "STREAMABLE_HTTP_AUTH_TOKENS_FILE is not compatible with OAUTH_STATELESS_MODE=true"
+      );
+    }
+  }
+
   const enableDynamicProjectScope =
     getConfig("enable-dynamic-project-scope", "ENABLE_DYNAMIC_PROJECT_SCOPE") === "true";
   if (enableDynamicProjectScope && !remoteAuth) {
@@ -2175,7 +2208,13 @@ if (REMOTE_AUTHORIZATION) {
     logger.error("Set STREAMABLE_HTTP=true to enable remote authorization");
     exitAfterFlush(1);
   }
-  logger.info("Remote authorization enabled: tokens will be read from HTTP headers");
+  if (STREAMABLE_HTTP_AUTH_TOKENS) {
+    logger.info(
+      `Remote authorization enabled: client bearer tokens are mapped to server-held GitLab tokens (${STREAMABLE_HTTP_AUTH_TOKENS.map(entry => entry.name).join(", ")})`
+    );
+  } else {
+    logger.info("Remote authorization enabled: tokens will be read from HTTP headers");
+  }
 }
 
 if (GITLAB_MCP_OAUTH) {
@@ -15747,6 +15786,15 @@ function buildDownloadProxyDeps(): DownloadProxyDependencies {
     fetch: undiciFetch,
     logger,
     isTrustedRedirectHost: isTrustedGitLabRedirectHost,
+    resolveHeaderAuth: STREAMABLE_HTTP_AUTH_TOKENS
+      ? authorization => {
+          const entry = findAuthTokenEntry(
+            STREAMABLE_HTTP_AUTH_TOKENS ?? [],
+            bearerToken(authorization)
+          );
+          return entry ? { header: "Authorization", value: `Bearer ${entry.gitlabToken}` } : null;
+        }
+      : undefined,
   };
 }
 
@@ -16168,6 +16216,22 @@ async function startStreamableHTTPServer(): Promise<void> {
     // PATs are preferred over job tokens because they carry broader permissions.
     let token: string | null = null;
     let header: "Authorization" | "Private-Token" | "JOB-TOKEN" | null = null;
+
+    if (STREAMABLE_HTTP_AUTH_TOKENS) {
+      // Server-held GitLab tokens: only a known client bearer token gets in, and
+      // GitLab tokens sent by the client are never used.
+      const entry = findAuthTokenEntry(STREAMABLE_HTTP_AUTH_TOKENS, bearerToken(authHeader));
+      if (!entry) {
+        return null;
+      }
+      return {
+        header: "Authorization",
+        token: entry.gitlabToken,
+        lastUsed: Date.now(),
+        apiUrl,
+        allowedProjectIds,
+      };
+    }
 
     if (privateToken) {
       token = privateToken.trim();
@@ -16831,6 +16895,19 @@ async function startStreamableHTTPServer(): Promise<void> {
 
     res.status(401).json({ error: "Streamable HTTP authentication required" });
   };
+  // With server-held GitLab tokens every request needs a known client bearer token:
+  // a session id alone would otherwise keep using the GitLab token stored for it.
+  const mappedMcpBearerAuth = (req: Request, res: Response, next: NextFunction) => {
+    if (
+      findAuthTokenEntry(STREAMABLE_HTTP_AUTH_TOKENS ?? [], bearerToken(req.headers.authorization))
+    ) {
+      next();
+      return;
+    }
+
+    metrics.authFailures++;
+    res.status(401).json({ error: "Streamable HTTP authentication required" });
+  };
   const mcpBearerAuth = GITLAB_MCP_OAUTH
     ? async (req: Request, res: Response, next: NextFunction) => {
         const privateToken = (req.headers["private-token"] as string | undefined) || "";
@@ -16888,9 +16965,11 @@ async function startStreamableHTTPServer(): Promise<void> {
 
         oauthBearerAuth!(req, res, next);
       }
-    : STREAMABLE_HTTP_AUTH_TOKEN && !REMOTE_AUTHORIZATION
-      ? staticMcpBearerAuth
-      : (_req: Request, _res: Response, next: NextFunction) => next();
+    : STREAMABLE_HTTP_AUTH_TOKENS
+      ? mappedMcpBearerAuth
+      : STREAMABLE_HTTP_AUTH_TOKEN && !REMOTE_AUTHORIZATION
+        ? staticMcpBearerAuth
+        : (_req: Request, _res: Response, next: NextFunction) => next();
 
   const rejectUnknownStatefulSession = (req: Request, res: Response, next: NextFunction) => {
     const usesStatelessSessions =

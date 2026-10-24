@@ -249,6 +249,47 @@ Notes:
   - `Private-Token: <token>`
   - `Job-Token: <token>`
 
+### `STREAMABLE_HTTP_AUTH_TOKENS_FILE`
+
+Path to a JSON file that maps client bearer tokens to GitLab tokens held by the
+server. Use it when several agents or users share one server, each should act as
+its own GitLab user, and the GitLab tokens must stay off the clients.
+
+```json
+[
+  { "name": "release-bot", "token": "<client token>", "gitlabToken": "glpat-..." },
+  { "name": "triage-agent", "token": "<client token>", "gitlabToken": "glpat-..." }
+]
+```
+
+Clients send only their own client token:
+
+```http
+Authorization: Bearer <client token>
+```
+
+and the server calls GitLab with the `gitlabToken` of that entry.
+
+Notes:
+
+- Requires `STREAMABLE_HTTP=true` and `REMOTE_AUTHORIZATION=true`; sessions,
+  validation against GitLab and `SESSION_TIMEOUT_SECONDS` work as in remote
+  authorization.
+- Every `/mcp` request needs a client token from the file — a session id alone
+  is not enough. `Private-Token` and `JOB-TOKEN` headers from clients are ignored,
+  so a client cannot substitute a GitLab token of its own.
+- `/downloads/*` maps the client token the same way.
+- Not compatible with `STREAMABLE_HTTP_AUTH_TOKEN`, `GITLAB_MCP_OAUTH=true`,
+  `OAUTH_STATELESS_MODE=true` or `ENABLE_DYNAMIC_API_URL=true` (a client-chosen
+  API URL would receive a server-held token).
+- Read once at startup. The server refuses to start on an invalid file:
+  non-empty `name`, `token` and `gitlabToken` per entry, unique names and client
+  tokens, tokens of at least 20 characters of `[-a-zA-Z0-9_.]`, and no client
+  token that is also a `gitlabToken`. Errors and logs name entries, never tokens.
+- Client tokens are compared in constant time. Permission mode, toolsets and
+  other server settings apply to every entry alike; what each client can reach
+  is decided by the GitLab user behind its `gitlabToken`.
+
 ### `GITLAB_ALLOW_UNAUTHENTICATED_TOOL_DISCOVERY`
 
 Optional. Set to `true` to let unauthenticated clients call `tools/list` in
@@ -1023,6 +1064,9 @@ listed in `MCP_ALLOWED_ORIGINS`.
 
 Bearer token required on `/mcp` when Streamable HTTP uses server-side GitLab
 credentials without `REMOTE_AUTHORIZATION` or `GITLAB_MCP_OAUTH`.
+
+For several clients with a GitLab user each, use
+[`STREAMABLE_HTTP_AUTH_TOKENS_FILE`](#streamable_http_auth_tokens_file) instead.
 
 ### `MCP_ALLOWED_HOSTS`
 
