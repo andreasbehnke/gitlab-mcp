@@ -2881,6 +2881,27 @@ export const ListIssuesSchema = z
     with_labels_details: coerceBooleanString
       .optional()
       .describe("Return more details for each label"),
+    order_by: z
+      .enum([
+        "created_at",
+        "updated_at",
+        "priority",
+        "due_date",
+        "relative_position",
+        "label_priority",
+        "milestone_due",
+        "popularity",
+        "title",
+        "weight",
+      ])
+      .optional()
+      .describe(
+        "Field to order issues by (GitLab default: created_at). relative_position is the manual order set by dragging issues on a board or in an issue list."
+      ),
+    sort: z
+      .enum(["asc", "desc"])
+      .optional()
+      .describe("Sort direction (GitLab default: desc)"),
   })
   .merge(PaginationOptionsSchema);
 
